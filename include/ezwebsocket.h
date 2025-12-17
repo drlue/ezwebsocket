@@ -165,6 +165,18 @@ const char *
 websocketServer_getServerIp(struct websocket_connection_desc *wsConnectionDesc);
 
 /**
+ * \brief Returns a specific HTTP header value from the WebSocket handshake request
+ *
+ * \param *wsConnectionDesc Pointer to the websocket connection descriptor
+ * \param *headerName The name of the header to retrieve (e.g., "X-Real-IP")
+ *
+ * \return The header value as a string or NULL if not found
+ */
+const char *
+websocketServer_getRequestHeader(struct websocket_connection_desc *wsConnectionDesc,
+                                 const char *headerName);
+
+/**
  * \brief Returns the user data of the given client
  *
  * \param *wsConnectionDesc Pointer to the websocket client descriptor

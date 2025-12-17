@@ -131,6 +131,8 @@ struct websocket_connection_desc {
   void *connectionUserData;
   //! stores the time for message timeouts
   struct timespec timeout;
+  //! stores the HTTP request headers from handshake (for server connections)
+  char *requestHeaders;
   //! union for either client or server descriptor
   union {
     //! pointer to the websocket client descriptor (in case of client mode)
@@ -396,7 +398,7 @@ EXIT:
 }
 
 // Frame format of a websocket:
-//​​
+// ​​
 //      0                   1                   2                   3
 //      0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //     +-+-+-+-+-------+-+-------------+-------------------------------+
@@ -442,7 +444,8 @@ struct ws_header {
  * \param *header Pointer to the header
  *
  */
-static void __attribute__((unused)) printWsHeader(const struct ws_header *header)
+static void __attribute__((unused))
+printWsHeader(const struct ws_header *header)
 {
   ezwebsocket_log(EZLOG_DEBUG, "----ws header----\n");
   ezwebsocket_log_continue(EZLOG_DEBUG, "opcode:%d\n", header->opcode);
@@ -1128,6 +1131,58 @@ websocketServer_getServerIp(struct websocket_connection_desc *wsConnectionDesc)
     return NULL;
 }
 
+const char *
+websocketServer_getRequestHeader(struct websocket_connection_desc *wsConnectionDesc,
+                                 const char *headerName)
+{
+  if (!wsConnectionDesc || !headerName || !wsConnectionDesc->requestHeaders)
+    return NULL;
+
+  // Find the header in the stored request
+  const char *header = wsConnectionDesc->requestHeaders;
+  size_t headerNameLen = strlen(headerName);
+  const char *line = header;
+
+  while (line && *line) {
+    // Skip to start of line
+    while (*line == '\r' || *line == '\n')
+      line++;
+
+    if (*line == '\0')
+      break;
+
+    // Check if this line starts with the header name
+    if (strncasecmp(line, headerName, headerNameLen) == 0) {
+      line += headerNameLen;
+      // Skip colon and whitespace
+      while (*line == ':' || *line == ' ' || *line == '\t')
+        line++;
+
+      // Find end of line
+      const char *end = line;
+      while (*end && *end != '\r' && *end != '\n')
+        end++;
+
+      // Allocate and return the value (caller should not free this - it's part of requestHeaders)
+      static char value[256];
+      size_t len = end - line;
+      if (len >= sizeof(value))
+        len = sizeof(value) - 1;
+      memcpy(value, line, len);
+      value[len] = '\0';
+      return value;
+    }
+
+    // Move to next line
+    while (*line && *line != '\n')
+      line++;
+    if (*line == '\n')
+      line++;
+  }
+
+  return NULL;
+}
+
 /**
  * \brief Function that gets called when a connection to a client is established
  *         allocates and initialises the wsClientDesc
@@ -1252,6 +1307,11 @@ websocket_onClose(void *socketUserData, void *socketConnectionDesc, void *wsConn
     free(wsConnectionDesc->lastMessage.data);
   wsConnectionDesc->lastMessage.data = NULL;
 
+  if (wsConnectionDesc->requestHeaders) {
+    free(wsConnectionDesc->requestHeaders);
+    wsConnectionDesc->requestHeaders = NULL;
+  }
+
   if (wsConnectionDesc->state == WS_STATE_CONNECTED) {
     wsConnectionDesc->state = WS_STATE_CLOSED;
 
@@ -1336,6 +1396,11 @@ websocket_onMessage(void *socketUserData, void *socketConnectionDesc, void *conn
     case WS_TYPE_SERVER:
       if (parseHttpHeader(msg, len, key) == 0) {
         struct websocket_server_desc *wsDesc = socketUserData;
+
+        // Store the HTTP headers from the handshake
+        if (wsConnectionDesc->requestHeaders)
+          free(wsConnectionDesc->requestHeaders);
+        wsConnectionDesc->requestHeaders = strndup(msg, len);
 
         replyKey = calculateSecWebSocketAccept(key);
         if (replyKey == NULL) {
